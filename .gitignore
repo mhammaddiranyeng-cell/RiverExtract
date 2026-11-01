@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.DS_Store
+matlab/figs/
+figs/*.png
+figs/fig_reg.pdf
