@@ -95,7 +95,8 @@ def bound4(route, tau_i, tp, Lv=LV, g=GAP, m=1, **_):
     return min(v, Lv / (m * T))
 
 
-def bound_noise(route, tau_i, tp, Lv=LV, g=GAP, m=1, sig_x=5.0, eps_v=0.05, margin=40.0, **_):
+def bound_noise(route, tau_i, tp, Lv=LV, g=GAP, m=1, sig_x=5.0, eps_v=0.05, margin=40.0,
+                first=False, **_):
     """Noise-aware bound, eq. (5): the action starts with a position error of
     variance eps^2/3 E[d^2] + sigma^2 + v^2/(12 f_c^2), where d, the distance
     from the newest usable detection to the action point, is uniform on
@@ -104,7 +105,9 @@ def bound_noise(route, tau_i, tp, Lv=LV, g=GAP, m=1, sig_x=5.0, eps_v=0.05, marg
     organic move: fails if it starts more than margin - 5 mm late (one-sided).
     Gaussian approximation; failure probability averaged over the lateral
     positions of the planar model; bound = highest speed with every lower
-    speed at <= 1% failure."""
+    speed at <= 1% failure.  first=True: the action is timed once from the
+    first detection (fixed-delay baseline), so d is measured from within
+    min(vT, Lv) of the window's upstream end: a = x_a + g + Lv - min(vT, Lv)."""
     from math import erf, sqrt
     Phi = lambda z: 0.5 * (1 + erf(z / sqrt(2)))
     T = tau_i + tp
@@ -127,6 +130,8 @@ def bound_noise(route, tau_i, tp, Lv=LV, g=GAP, m=1, sig_x=5.0, eps_v=0.05, marg
                 aim, tol = om - margin, margin - 5.0
             a = max(aim + g, v * (tau_i + 1.0 / F_CAM + 0.015))
             W = min(v * T, Lv)
+            if first:
+                a = aim + g + Lv - W
             Ed2 = a * a + a * W + W * W / 3
             se = sqrt(eps_v ** 2 / 3 * Ed2 + sig_x ** 2 + (v / F_CAM) ** 2 / 12)
             fails.append(2 * (1 - Phi(tol / se)) if route == 'P' else 1 - Phi(tol / se))
@@ -173,6 +178,22 @@ out['Tdesign'] = '0.40'
 
 # speed at which the old design point (T = 1.0 s) passes -> gain from removing the pacing
 out['GainPace'] = f"{TAB['D']['sim'] / TAB['P6']['sim']:.1f}"
+
+# x*(v) is close to linear on the grid, |x*| = x0 + v t_lead, which turns (4) into
+# v <= (g + Lv - x0) / (T + tau_i + 1/f_c + t_lead)
+VV = np.array(VS, dtype=float) / 1000.0
+for route, name in (('P', 'P'), ('O', 'O')):
+    xs_ = np.array([xstar(v, route) for v in VS])
+    ok_ = np.isfinite(xs_)
+    lead, x0 = np.polyfit(VV[ok_], xs_[ok_], 1)
+    res = np.abs(xs_[ok_] - (x0 + lead * VV[ok_])).max()
+    vcf = (GAP + LV - x0) / (CFG['D']['tau_i'] + CFG['D']['tp'] + CFG['D']['tau_i'] + 1.0 / F_CAM + lead / 1000.0)
+    out[f'Xs{name}zero'] = f'{x0:.0f}'
+    out[f'Xs{name}lead'] = f'{lead:.0f}'
+    out[f'Xs{name}res'] = f'{res:.1f}'
+    out[f'Vcf{name}lin'] = f2(min(vcf, LV / (CFG['D']['tau_i'] + CFG['D']['tp'])))
+    print(f'x* {route}: {x0:.1f} mm + v * {lead:.1f} ms (max residual {res:.1f} mm), '
+          f'closed-form (4) at D: {vcf:.0f} mm/s')
 
 # ---------------------------------------------- wrong-bin / four outcomes ---
 def four(v, pm, conf):
@@ -244,6 +265,71 @@ print('best td', BEST)
 # registrations, level-triggered, at the new loop period
 out['RegsTen'] = f"{tm.regs_level_closed(100.0, 0.4, 300.0, 0.0):.1f}"
 out['RegsTenOld'] = f"{tm.regs_level_closed(100.0, 1.0, 300.0, 0.0):.1f}"
+
+# ------------------------------------------- stronger baselines (fixed delay) ---
+# run_v3_baseline2.py: every action timed once from the first detection, with the
+# belt speed from an encoder (Enc) or from the tracks (Trk), and the event-driven
+# controller with an encoder (EncNew); prop|D and prop|sig10 are the event-driven
+# controller with the speed from the tracks (EnvD, EnvSig).
+B2 = json.load(open('results/v3_baseline2.json')) if os.path.exists('results/v3_baseline2.json') else {}
+
+
+def v99_b2(var, thr=0.99):
+    best = None
+    for v in VS:
+        rs = [B2.get(f'{var}|{r}|{v}') for r in ('PLASTIC', 'ORGANIC')]
+        if None in rs:
+            break
+        if min(wilson_lb(x['k_ok'], x['n']) for x in rs) >= thr:
+            best = v
+        else:
+            break
+    return best
+
+
+def mean_d(route, v, cfg, first):
+    """Mean distance from the timing detection to the action point (mm), over
+    the lateral positions, as in bound_noise."""
+    kw = CFG[cfg]
+    T = kw['tau_i'] + kw['tp']
+    ds = []
+    for j in range(len(YS)):
+        if route == 'P':
+            lo, hi = np.interp(v, VS, S_LO[:, j]), np.interp(v, VS, S_HI[:, j])
+            aim = 0.5 * (lo + hi)
+        else:
+            aim = np.interp(v, VS, O_MAX[:, j]) - 40.0
+        if not np.isfinite(aim):
+            continue
+        W = min(v * T, LV)
+        a = aim + GAP + LV - W if first else max(aim + GAP, v * (kw['tau_i'] + 1.0 / F_CAM + 0.015))
+        ds.append(a + W / 2)
+    return float(np.mean(ds))
+
+
+if B2:
+    for var, name in (('enc1', 'EncFirst'), ('vis1', 'TrkFirst'), ('encR', 'EncNew'),
+                      ('enc1s10', 'EncFirstSig'), ('vis1s10', 'TrkFirstSig'), ('encRs10', 'EncNewSig')):
+        vb = v99_b2(var)
+        out[f'Bl{name}'] = f2(vb) if vb else 'none'
+        print(f'baseline {var:8s} v99 = {vb}')
+    pl = [B2[f'vis1s10|PLASTIC|{v}']['ok'] for v in VS if v <= TAB['sig10']['b4']]
+    out['BlTrkFirstSigPmin'] = f'{100 * min(pl):.0f}'
+    out['BlTrkFirstSigPmax'] = f'{100 * max(pl):.0f}'
+    for c, name in (('D', 'D'), ('sig10', 'Sig')):
+        bf = min(TAB[c]['b4'], bound_noise('P', first=True, **CFG[c]), bound_noise('O', first=True, **CFG[c]))
+        out[f'BnnFirst{name}'] = f2(bf) if bf >= 50 else 'none'
+        print(f'eq. (5) timed from the first detection, {c}: {bf:.0f} mm/s')
+    # at low speed the first detection is several times farther from the action
+    # point than the newest one; near bound (4) only one detection arrives in time
+    out['DnewPten'] = f'{mean_d("P", 100, "D", False):.0f}'
+    out['DfirstPten'] = f'{mean_d("P", 100, "D", True):.0f}'
+    out['DnewOten'] = f'{mean_d("O", 100, "D", False):.0f}'
+    out['DfirstOten'] = f'{mean_d("O", 100, "D", True):.0f}'
+    for v in (100, 200, 300, 370):
+        print(f'mean d at {v} mm/s: strike {mean_d("P", v, "D", False):.0f} (newest) vs '
+              f'{mean_d("P", v, "D", True):.0f} (first); organic {mean_d("O", v, "D", False):.0f} vs '
+              f'{mean_d("O", v, "D", True):.0f} mm')
 
 # ---------------------------------------------------------------- figure 5 ---
 fig, axs = plt.subplots(2, 1, figsize=(COL, 3.2), sharex=True,
@@ -418,6 +504,8 @@ out['MmaxFull'] = f'{1000 * m_max(0.59, 0.090):.0f}'
 out['MmaxSixty'] = f'{1000 * m_max(0.6 * 0.59, 0.090):.0f}'
 out['MmaxNtwentythree'] = f'{1000 * m_max(1.26, 0.090, J_rot=280e-7):.0f}'
 out['MmaxNtwentythreeL'] = f'{1000 * m_max(1.90, 0.090, J_rot=480e-7):.0f}'
+# the same motor on the TB6600 at 2.2 A (holding torque scaled with the current)
+out['MmaxNtwentythreeTB'] = f'{1000 * m_max(1.90 * 2.2 / 2.8, 0.090, J_rot=480e-7):.0f}'
 SL = json.load(open('results/stepper_load.json')) if os.path.exists('results/stepper_load.json') else None
 if SL:
     out['RcMinAim'] = f"{min(SL['rc']):.0f}"

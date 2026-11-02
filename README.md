@@ -34,11 +34,12 @@ cd sim
 python3 run_v3_cw.py       # capture windows of the gate, 0.05-0.60 m/s
 python3 run_v3_mc.py       # Monte Carlo: loop periods, design envelope, first firmware, misclassification
 python3 run_v3_multi.py    # pairs and random streams of several items
+python3 run_v3_baseline2.py  # stronger baselines: fixed delay from the first detection, encoder speed
 python3 stepper_load.py    # contact radius and item-mass limit of the strike
 python3 gen_v3.py          # numbers (paper/numbers_v3.tex) and result figures (figs/)
 ```
 
-The full run takes about an hour on two cores. Its results are kept in `sim/results/`, so
+The full run takes about 75 minutes on two cores. Its results are kept in `sim/results/`, so
 `python3 gen_v3.py` on its own regenerates the numbers and figures in seconds. The geometry,
 motion and contact-map figures come from `fig_geom.py`, `fig_motion.py` and `fig_maps.py`,
 and Fig. 1 from `fig_overview.py`. For the MATLAB versions of the figures, run
@@ -53,7 +54,7 @@ and Fig. 1 from `fig_overview.py`. For the MATLAB versions of the figures, run
 | Vision layer | Raspberry Pi 4, Logitech C270 camera, YOLOv8n (COCO weights) at 320 px, web dashboard |
 | Link | Four relay contacts from the Pi to PLC inputs (pause and three bin-full signals); the two layers share no wire |
 | Gate | 200 x 80 x 5 mm PLA plate on a center pivot: rest pose, organic hold, plastic strike. NEMA 17 on an A4988 in the bench test; now a NEMA 23 (23HS30-2804S) on a TB6600 |
-| Power | Photovoltaic panel charging a 24 V battery |
+| Power | 100 W photovoltaic panel charging a 24 V, 100 Ah battery |
 | Cost | About USD 900 in parts |
 
 ## License

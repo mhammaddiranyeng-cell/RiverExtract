@@ -104,10 +104,14 @@ def nth_detection(det, m):
 # controllers
 # ---------------------------------------------------------------------------
 def proposed(route, n, v, T, Lv, g, pm, rng, w=65.0, m=1, sig_x=5.0,
-             eps_v=0.05, margin=40.0, cw=None, mu=0.5, tau_i=None, with_decided=False):
+             eps_v=0.05, margin=40.0, cw=None, mu=0.5, tau_i=None, with_decided=False,
+             replan=True):
     """Simulate the proposed controller for n items of one route class.
     Returns outcome codes and per-item registration counts.
-    tau_i: inference latency (default T - T_PACE, the paper's v1 model)."""
+    tau_i: inference latency (default T - T_PACE, the paper's v1 model).
+    replan=False: every action is timed once from the committing detection
+    (fixed delay from the first detection; with eps_v=0 this is the baseline
+    with an encoder-measured belt speed)."""
     if tau_i is None:
         tau_i = T - T_PACE
     S = sample_items(n, v, T, Lv, g, pm, rng)
@@ -154,7 +158,7 @@ def proposed(route, n, v, T, Lv, g, pm, rng, w=65.0, m=1, sig_x=5.0,
         aim = np.interp(yh, cw['y'], 0.5 * (cw['s_lo'] + cw['s_hi']))
         t_act = th + (aim - xh) / vh
         # re-plan once with the newest detection available 10 ms before the stroke
-        idx = latest_before(t_act - 0.010)
+        idx = latest_before(t_act - 0.010) if replan else kk
         xh, yh, th = predict(idx)
         aim = np.interp(yh, cw['y'], 0.5 * (cw['s_lo'] + cw['s_hi']))
         hi = np.interp(yh, cw['y'], cw['s_hi'])
@@ -175,7 +179,7 @@ def proposed(route, n, v, T, Lv, g, pm, rng, w=65.0, m=1, sig_x=5.0,
         xh, yh, th = predict(kk)
         omax = np.interp(yh, cw['y'], cw['o_max'])
         t_act = th + (omax - margin - xh) / vh
-        idx = latest_before(t_act - 0.010)
+        idx = latest_before(t_act - 0.010) if replan else kk
         xh, yh, th = predict(idx)
         omax = np.interp(yh, cw['y'], cw['o_max'])
         t_act = th + (omax - margin - xh) / vh
@@ -184,7 +188,7 @@ def proposed(route, n, v, T, Lv, g, pm, rng, w=65.0, m=1, sig_x=5.0,
         feas = (~late | (x_pred_dec <= omax - 5.0)) & np.isfinite(t_act) & np.isfinite(omax)
         t_act = np.where(late, t_dec, t_act)
         # release instant re-planned from the newest detection of the item
-        idx2 = latest_before(np.full(nd, np.inf))
+        idx2 = latest_before(np.full(nd, np.inf)) if replan else kk
         xh2, yh2, th2 = predict(idx2)
         xc_pred = -yh2 - h * math.sqrt(2)
         t_ret = th2 + (xc_pred - xh2) / vh + 0.10
